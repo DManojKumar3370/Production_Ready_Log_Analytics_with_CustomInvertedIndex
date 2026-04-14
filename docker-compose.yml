@@ -1,0 +1,98 @@
+version: '3.8'
+
+services:
+  ingestor:
+    build:
+      context: ./ingestor
+      dockerfile: Dockerfile
+    container_name: ingestor
+    ports:
+      - "${INGESTOR_PORT}:8000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - BUFFER_WINDOW_SECONDS=${BUFFER_WINDOW_SECONDS}
+      - DATA_DIR=/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  indexer:
+    build:
+      context: ./indexer
+      dockerfile: Dockerfile
+    container_name: indexer
+    volumes:
+      - ./data:/app/data
+      - ./reports:/app/reports
+    environment:
+      - INGESTOR_HOST=ingestor
+      - INGESTOR_PORT=8000
+      - DATA_DIR=/app/data
+      - REPORTS_DIR=/app/reports
+      - BATCH_SIZE=${BATCH_SIZE}
+      - INDEX_CHECK_INTERVAL=${INDEX_CHECK_INTERVAL}
+    depends_on:
+      ingestor:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import requests; requests.get('http://localhost:8001/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  log-generator:
+    build:
+      context: ./log-generator
+      dockerfile: Dockerfile
+    container_name: log-generator
+    environment:
+      - INGESTOR_HOST=ingestor
+      - INGESTOR_PORT=8000
+      - LOG_GENERATION_INTERVAL=${LOG_GENERATION_INTERVAL}
+      - TIME_JITTER_SECONDS=${TIME_JITTER_SECONDS}
+    depends_on:
+      ingestor:
+        condition: service_healthy
+    restart: no
+
+  querier:
+    build:
+      context: ./querier
+      dockerfile: Dockerfile
+    container_name: querier
+    volumes:
+      - ./data:/app/data
+    environment:
+      - DATA_DIR=/app/data
+    entrypoint: ["python3", "cli.py"]
+    stdin_open: true
+    tty: true
+    profiles:
+      - interactive
+
+  scheduler:
+    build:
+      context: ./scheduler
+      dockerfile: Dockerfile
+    container_name: scheduler
+    volumes:
+      - ./data:/app/data
+      - ./reports:/app/reports
+    environment:
+      - DATA_DIR=/app/data
+      - REPORTS_DIR=/app/reports
+      - REPORT_TIME=${REPORT_TIME}
+    depends_on:
+      indexer:
+        condition: service_healthy
+
+volumes:
+  data:
+    driver: local
+  reports:
+    driver: local
